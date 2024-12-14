@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC Video Call</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-100 text-gray-800 font-sans">
+    <div
+      class="min-h-screen flex flex-col items-center justify-center space-y-6"
+    >
+      <h1 class="text-3xl font-bold text-blue-600">Simple WebRTC Video Call</h1>
+
+      <button
+        id="startBtn"
+        class="px-6 py-3 bg-blue-500 text-white font-semibold rounded shadow-md hover:bg-blue-600 transition"
+      >
+        Start Video Call
+      </button>
+
+      <div class="flex space-x-4 mt-6">
+        <video
+          id="localVideo"
+          class="w-1/2 border border-gray-300 rounded-lg shadow-md"
+          autoplay
+          playsinline
+          muted
+        ></video>
+        <video
+          id="remoteVideo"
+          class="w-1/2 border border-gray-300 rounded-lg shadow-md"
+          autoplay
+          playsinline
+        ></video>
+      </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+      const roomName = "simple-webrtc-demo";
+
+      const startBtn = document.getElementById("startBtn");
+      const localVideo = document.getElementById("localVideo");
+      const remoteVideo = document.getElementById("remoteVideo");
+
+      let localStream;
+      let pc;
+
+      const configuration = {
+        iceServers: [
+          { urls: "stun:stun.services.mozilla.com" },
+          { urls: "stun:stun.l.google.com:19302" },
+          {
+            urls: "turn:relay.metered.ca:80",
+            username: "relayUsername",
+            credential: "relayPassword",
+          },
+        ],
+      };
+
+      startBtn.onclick = async () => {
+        startBtn.disabled = true;
+
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+          });
+          localVideo.srcObject = localStream;
+
+          socket.emit("join", roomName);
+          console.log("Joined room:", roomName);
+        } catch (err) {
+          console.error("Error accessing media devices:", err);
+        }
+      };
+
+      socket.on("user-joined", async () => {
+        console.log("Another user joined the room");
+        createPeerConnection();
+        localStream.getTracks().forEach((track) => {
+          console.log("Adding local track:", track);
+          pc.addTrack(track, localStream);
+        });
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("offer", { offer: pc.localDescription, room: roomName });
+      });
+
+      socket.on("offer", async (offer) => {
+        console.log("Received offer");
+        createPeerConnection();
+        localStream.getTracks().forEach((track) => {
+          console.log("Adding local track:", track);
+          pc.addTrack(track, localStream);
+        });
+
+        await pc.setRemoteDescription(offer);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("answer", { answer: pc.localDescription, room: roomName });
+      });
+
+      socket.on("answer", async (answer) => {
+        console.log("Received answer");
+        await pc.setRemoteDescription(answer);
+      });
+
+      socket.on("ice-candidate", async (candidate) => {
+        console.log("Received ICE candidate:", candidate);
+        try {
+          await pc.addIceCandidate(candidate);
+        } catch (err) {
+          console.error("Error adding ICE candidate:", err);
+        }
+      });
+
+      function createPeerConnection() {
+        if (pc) return;
+        console.log("Creating RTCPeerConnection");
+        pc = new RTCPeerConnection(configuration);
+
+        pc.onicecandidate = ({ candidate }) => {
+          if (candidate) {
+            console.log("Sending ICE candidate:", candidate);
+            socket.emit("ice-candidate", { candidate, room: roomName });
+          }
+        };
+
+        pc.ontrack = (event) => {
+          console.log("Received remote track:", event.streams[0]);
+          remoteVideo.srcObject = event.streams[0];
+        };
+
+        pc.onconnectionstatechange = () => {
+          console.log("Connection state:", pc.connectionState);
+        };
+      }
+    </script>
+  </body>
+</html>
